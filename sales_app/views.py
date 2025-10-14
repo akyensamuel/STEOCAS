@@ -31,9 +31,10 @@ def is_manager(user):
 
 def validate_stock_availability(formset_data):
     """
-    Validate that all items exist in the product catalog.
-    Note: Stock levels are now handled during deduction with minimum zero enforcement.
-    Returns a list of error messages if validation fails.
+    Validate sale items - informational only.
+    Products can go into negative stock (backorders are allowed).
+    Custom items (not in product database) are also allowed.
+    Returns an empty list (no blocking errors).
     """
     errors = []
     stock_requirements = {}  # {product_name: total_quantity_needed}
@@ -48,19 +49,23 @@ def validate_stock_availability(formset_data):
                 if item_name and quantity > 0:
                     stock_requirements[item_name] = stock_requirements.get(item_name, 0) + quantity
         logger.debug(f"Stock requirements: {stock_requirements}")
-        # Only check that products exist - no longer blocking on stock levels
+        
+        # Check products and log stock status (informational only - never blocks sales)
         for item_name, total_needed in stock_requirements.items():
             try:
                 product = Product.objects.get(name=item_name)
                 available = product.stock or 0
                 logger.debug(f"Product {item_name}: needed {total_needed}, available {available}")
-                # Log low stock warning but don't block the sale
+                
+                # Log stock status but don't block the sale
                 if available < total_needed:
-                    logger.warning(f"STOCK WARNING: Low stock for '{item_name}'. Needed: {total_needed}, Available: {available} (Sale will proceed, stock will be capped at zero)")
+                    shortage = total_needed - available
+                    logger.info(f"BACKORDER: '{item_name}' - Needed: {total_needed}, Available: {available}, Backorder: {shortage} (Sale will proceed)")
+                else:
+                    logger.info(f"STOCK OK: '{item_name}' - Needed: {total_needed}, Available: {available}")
             except Product.DoesNotExist:
-                error_msg = f"Product '{item_name}' not found in inventory."
-                errors.append(error_msg)
-                logger.error(f"PRODUCT ERROR: {error_msg}")
+                # Custom/one-time items are allowed - no error
+                logger.info(f"CUSTOM ITEM: '{item_name}' not in product database (one-time/custom sale)")
     except Exception as validation_error:
         error_msg = f"Stock validation error: {str(validation_error)}"
         errors.append(error_msg)
@@ -76,7 +81,7 @@ def validate_stock_availability(formset_data):
 def deduct_stock_for_sale_items(formset_data, invoice_no):
     """
     Deduct stock quantities for all items in the sale.
-    Stock levels are capped at zero (never goes negative).
+    Stock levels CAN go negative (tracks backorders/oversold items).
     This function should be called within a database transaction.
     """
     stock_deductions = {}  # {product_name: total_quantity_to_deduct}
@@ -90,22 +95,20 @@ def deduct_stock_for_sale_items(formset_data, invoice_no):
             if item_name and quantity > 0:
                 stock_deductions[item_name] = stock_deductions.get(item_name, 0) + quantity
     
-    # Apply deductions with zero-floor enforcement
+    # Apply deductions (allowing negative stock)
     for item_name, total_deduction in stock_deductions.items():
         try:
             product = Product.objects.select_for_update().get(name=item_name)
             current_stock = product.stock or 0
             
-            # Calculate actual deduction (never let stock go negative)
-            actual_deduction = min(total_deduction, current_stock)
-            new_stock = max(0, current_stock - total_deduction)
+            # Allow stock to go negative (tracks backorders)
+            new_stock = current_stock - total_deduction
             
             product.stock = new_stock
             product.save()
             
-            if actual_deduction < total_deduction:
-                shortage = total_deduction - actual_deduction
-                logger.warning(f"STOCK CAPPED: {item_name} - attempted {total_deduction}, deducted {actual_deduction}, shortage {shortage}. New stock: {new_stock}")
+            if new_stock < 0:
+                logger.warning(f"BACKORDER: {item_name} - deducted {total_deduction}, new stock: {new_stock} (backorder: {abs(new_stock)} units)")
             else:
                 logger.info(f"Stock deducted: {item_name} - {total_deduction} units. New stock: {new_stock}")
             
