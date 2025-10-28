@@ -395,30 +395,10 @@
                 // Calculate balance first
                 calculateBalance();
                 
-                // Show a brief message to user
-                const loadingMsg = document.createElement('div');
-                loadingMsg.innerHTML = `
-                    <div style="position: fixed; top: 20px; left: 50%; transform: translateX(-50%); 
-                                background: #4CAF50; color: white; padding: 12px 24px; 
-                                border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); 
-                                z-index: 10000; font-weight: bold; text-align: center;">
-                        📄 Receipt Ready! Print dialog opening...
-                    </div>
-                `;
-                document.body.appendChild(loadingMsg);
-                
-                // Small delay to let user see the message, then trigger print
+                // Trigger print dialog immediately
                 setTimeout(function() {
                     console.log('Triggering print dialog...');
                     window.print();
-                    
-                    // Remove the loading message after print is triggered
-                    setTimeout(function() {
-                        if (loadingMsg.parentNode) {
-                            loadingMsg.parentNode.removeChild(loadingMsg);
-                        }
-                    }, 1000);
-                    
                 }, 300);
                 
                 // Set up redirect with longer timeout to allow printing
